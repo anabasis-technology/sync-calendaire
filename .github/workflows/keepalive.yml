@@ -1,0 +1,24 @@
+name: Keepalive
+
+# GitHub désactive automatiquement les workflows planifiés après 60 jours sans
+# activité sur le dépôt. Ce petit commit hebdomadaire suffit à l'éviter.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  touch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: date -u +"Dernier keepalive : %Y-%m-%dT%H:%M:%SZ" > KEEPALIVE.md
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add KEEPALIVE.md
+          git diff --cached --quiet || git commit -m "keepalive"
+          git push

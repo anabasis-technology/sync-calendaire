@@ -1,0 +1,13 @@
+{
+  "name": "sync-calendaire",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Synchronisation TickTick -> Notion (projet Sync Calendaire)",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "sync": "node sync.js"
+  }
+}
