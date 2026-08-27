@@ -782,7 +782,9 @@ async function syncGoogleCalendarProject(calConfig, calendarId, tasks, projectIn
     try {
       const fetched = await ticktickFetch(`/project/${calConfig.ticktickProjectId}/task/${ttId}`);
       await sleep(300);
-      const isGoneOrDone = fetched.__notFound || fetched.status === 2;
+      // `fetched` peut valoir `null` (200 avec corps vide, constaté sur une tâche réellement
+      // supprimée le 27/08/2026) : traité comme équivalent à __notFound, voir syncProject.
+      const isGoneOrDone = !fetched || fetched.__notFound || fetched.status === 2;
       if (!isGoneOrDone) continue;
       await gcalFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${ev.id}`, { method: 'DELETE' });
       stats.gcalDeleted++;
@@ -937,9 +939,12 @@ async function syncProject(project) {
       }
       await sleep(300);
 
-      if (fetched && fetched.__notFound) {
+      if (!fetched || fetched.__notFound) {
         // Là, vraiment supprimée -> on archive le miroir Notion. On ne fait jamais
-        // l'inverse (archiver Notion ne supprime pas la tâche TickTick).
+        // l'inverse (archiver Notion ne supprime pas la tâche TickTick). `fetched` peut
+        // valoir `null` (corps de réponse vide avec un statut 200 tout de même) : constaté
+        // le 27/08/2026 sur deux tâches réellement supprimées, faisait planter le sync avec
+        // "Cannot read properties of null" avant ce correctif.
         try {
           await notionFetch(`/pages/${page.id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) });
           stats.archived++;
