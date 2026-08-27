@@ -425,6 +425,22 @@ function computeTicktickSnapshot(task, schema, projectIndex) {
   return snapshotOf(ticktickDerivedFields(task, schema, projectIndex));
 }
 
+// Une tâche complétée dans TickTick n'a plus d'intérêt à rester visible dans Notion (confirmé
+// par l'utilisateur le 27/08/2026, sur Tâches Freelance et Personnel) : on archive sa page
+// plutôt que de simplement cocher la case. TickTick reste seul à garder l'historique des
+// tâches terminées ; archiver ici n'y touche jamais (voir limite "Suppression Notion ->
+// TickTick" du README).
+async function pushTicktickStateToNotion(task, page, project, projectIndex, stats) {
+  if (task.status === 2) {
+    await notionFetch(`/pages/${page.id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) });
+    stats.archived++;
+  } else {
+    const properties = buildNotionPropertiesFromTask(task, project.schema, projectIndex);
+    await notionFetch(`/pages/${page.id}`, { method: 'PATCH', body: JSON.stringify({ properties }) });
+    stats.toNotionUpdated++;
+  }
+}
+
 // ---------- Construction des propriétés Notion à partir d'une tâche TickTick ----------
 
 function buildNotionPropertiesFromTask(task, schema, projectIndex) {
@@ -969,9 +985,7 @@ async function syncProject(project) {
         // TickTick (source de vérité par défaut pour une page qu'on découvre côté sync)
         // sans rien pousser vers TickTick, pour ne jamais écraser une tâche à l'aveugle.
         if (notionSnapshot !== ticktickSnapshot) {
-          const properties = buildNotionPropertiesFromTask(task, project.schema, projectIndex);
-          await notionFetch(`/pages/${page.id}`, { method: 'PATCH', body: JSON.stringify({ properties }) });
-          stats.toNotionUpdated++;
+          await pushTicktickStateToNotion(task, page, project, projectIndex, stats);
         } else {
           await notionFetch(`/pages/${page.id}`, {
             method: 'PATCH',
@@ -993,9 +1007,7 @@ async function syncProject(project) {
       const pushFromTicktick = ticktickChanged;
 
       if (pushFromTicktick) {
-        const properties = buildNotionPropertiesFromTask(task, project.schema, projectIndex);
-        await notionFetch(`/pages/${page.id}`, { method: 'PATCH', body: JSON.stringify({ properties }) });
-        stats.toNotionUpdated++;
+        await pushTicktickStateToNotion(task, page, project, projectIndex, stats);
       } else {
         const payload = buildTicktickPayloadFromPage(page, project.schema, projectIndex, knownTagSpellings);
         const checked = getChecked(page);
