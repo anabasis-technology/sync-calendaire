@@ -37,6 +37,9 @@ const ORPHAN_PUSH_FLAG_PROP = '→ TickTick';
 const MAX_ORPHAN_PUSH_PER_RUN = 5;
 
 const WORKFLOW_DATA_SOURCE_ID = '2f0ab52f-34f1-80b8-b9ce-000b7a24fb71';
+// Projet "fourre-tout" (créé le 27/08/2026) : une tâche freelance sans tag correspondant à
+// un projet client précis est du travail interne Anabasis quand même — jamais "sans projet".
+const DEFAULT_PROJECT_ID = '3c9ab52f-34f1-8123-b297-cbade90bd3e6'; // page "Anabasis" dans Workflow
 
 const PROJECTS = [
   {
@@ -156,7 +159,10 @@ async function loadWorkflowProjects() {
       body: JSON.stringify({ page_size: 100, start_cursor: cursor }),
     });
     for (const page of result.results) {
-      const title = page.properties?.Nom?.title?.[0]?.plain_text;
+      // Propriété titre renommée "Nom" -> "Nom du projet" le 27/08/2026 (constaté en
+      // tentant de créer une page) : ce champ pointait dans le vide depuis, la mise en
+      // relation Projet ne fonctionnait donc plus silencieusement (aucune erreur levée).
+      const title = page.properties?.['Nom du projet']?.title?.[0]?.plain_text;
       if (title) {
         byNormalizedTitle.set(normalize(title), page.id);
         titleById.set(page.id, title);
@@ -271,7 +277,7 @@ function ticktickDerivedFields(task, schema, projectIndex) {
     // task.completedTime n'est PAS un indicateur d'état courant : TickTick ne l'efface pas
     // quand on rouvre une tâche (vérifié empiriquement). Seul task.status fait foi.
     checked: task.status === 2,
-    projet: schema === 'freelanceTasks' ? projectPageId : null,
+    projet: schema === 'freelanceTasks' ? (projectPageId || DEFAULT_PROJECT_ID) : null,
     priority: schema === 'freelanceTasks' ? (PRIORITY_TO_NOTION[task.priority] || 'Aucune') : null,
   };
 }
