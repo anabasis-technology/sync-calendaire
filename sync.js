@@ -73,7 +73,12 @@ const TAG_MAP = {
   // Clés = forme normalize() du tag TickTick (sans accent) ; valeurs = libellé affiché dans
   // le multi-select Notion. Une clé accentée ici ne matcherait jamais (bug constaté le
   // 27/08/2026 : "comptabilité" était silencieusement ignoré depuis la mise en place du sync).
-  freelanceTasks: { comptabilite: 'Comptabilité', bug: 'BUG', finance: 'Finance', anabasis: 'Anabasis', adm: 'ADM', article: 'Article' },
+  // "anabasis" volontairement absent ici : c'est un nom de projet Workflow (comme "brainup"
+  // ou "prepass"), jamais une étiquette générique, sur Tâches Freelance — un tag ne peut
+  // relier qu'un seul projet à la fois, jamais aussi apparaître dans Tags (règle confirmée
+  // le 27/08/2026). Reste une étiquette générique valide côté Personnel (pas de notion de
+  // projet là-bas), volontairement laissé tel quel juste en dessous.
+  freelanceTasks: { comptabilite: 'Comptabilité', bug: 'BUG', finance: 'Finance', adm: 'ADM', article: 'Article' },
   personnel: { gcal: 'GCal', adm: 'ADM', anabasis: 'Anabasis', finance: 'Finance', comptabilite: 'Comptabilité', bug: 'BUG' },
 };
 
