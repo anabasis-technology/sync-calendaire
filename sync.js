@@ -48,6 +48,10 @@ const PROJECTS = [
     notionDataSourceId: 'bf6dd6cd-3ac2-49d8-aeca-35a61f40a1c5',
     schema: 'freelanceTasks',
     matchProjects: true,
+    // Base neuve, dédiée à ce sync : pas des années de notes perso pré-existantes à risque
+    // de se faire aspirer (c'est précisément ce qui s'est produit sur Personnel). Une page
+    // sans TickTick ID y est donc automatiquement poussée, sans case à cocher à activer.
+    autoCreateWithoutFlag: true,
   },
   {
     name: 'Personnel <-> Personnel',
@@ -55,6 +59,9 @@ const PROJECTS = [
     notionDataSourceId: '24eab52f-34f1-8152-92af-000b75158c4a',
     schema: 'personnel',
     matchProjects: false,
+    // Base ancienne avec des années de contenu manuel sans lien avec ce sync : la case
+    // "→ TickTick" reste un garde-fou obligatoire ici, ne jamais rendre automatique.
+    autoCreateWithoutFlag: false,
   },
 ];
 
@@ -314,16 +321,36 @@ function buildNotionPropertiesFromTask(task, schema, projectIndex) {
 
 // ---------- Construction du payload TickTick à partir d'une page Notion ----------
 
-function buildTicktickPayloadFromPage(page, schema, projectIndex) {
+// TickTick stocke certains tags accentués (ex. "comptabilité", "prépass"). normalize() les
+// dénormalise volontairement pour un matching robuste, mais renvoyer cette forme "nue" vers
+// TickTick créerait un tag frère sans accent au lieu de réutiliser l'existant. On préfère
+// donc l'orthographe déjà vue dans les tâches TickTick chargées, quand elle existe.
+function buildKnownTagSpellings(tasks) {
+  const spellings = new Map();
+  for (const task of tasks) {
+    for (const tag of task.tags || []) {
+      const key = normalize(tag);
+      if (!spellings.has(key)) spellings.set(key, tag);
+    }
+  }
+  return spellings;
+}
+
+function preferredTagSpelling(tag, knownTagSpellings) {
+  const key = normalize(tag);
+  return (knownTagSpellings && knownTagSpellings.get(key)) || key;
+}
+
+function buildTicktickPayloadFromPage(page, schema, projectIndex, knownTagSpellings) {
   const title = getTitle(page, schema);
   const description = getDescription(page);
-  const genericTags = getTags(page).map((t) => normalize(t));
+  const genericTags = getTags(page).map((t) => preferredTagSpelling(t, knownTagSpellings));
   const tags = [...genericTags];
 
   if (schema === 'freelanceTasks' && projectIndex) {
     const projetId = getProjetRelationId(page);
     if (projetId && projectIndex.titleById.has(projetId)) {
-      const projectTag = normalize(projectIndex.titleById.get(projetId));
+      const projectTag = preferredTagSpelling(projectIndex.titleById.get(projetId), knownTagSpellings);
       if (!tags.includes(projectTag)) tags.push(projectTag);
     }
   }
@@ -364,6 +391,8 @@ async function syncProject(project) {
     return stats;
   }
 
+  const knownTagSpellings = buildKnownTagSpellings(data.tasks || []);
+
   let projectIndex = null;
   if (project.matchProjects) {
     try {
@@ -394,13 +423,13 @@ async function syncProject(project) {
     const ttId = getTicktickId(page);
     if (ttId) {
       pagesByTicktickId.set(ttId, page);
-    } else if (page.properties?.[ORPHAN_PUSH_FLAG_PROP]?.checkbox) {
+    } else if (project.autoCreateWithoutFlag || page.properties?.[ORPHAN_PUSH_FLAG_PROP]?.checkbox) {
       orphanPages.push(page);
     }
   }
 
   if (orphanPages.length > MAX_ORPHAN_PUSH_PER_RUN) {
-    console.error(`[${project.name}] ${orphanPages.length} pages cochées "→ TickTick" en même temps, plafonné à ${MAX_ORPHAN_PUSH_PER_RUN} par passage (garde-fou).`);
+    console.error(`[${project.name}] ${orphanPages.length} pages à créer côté TickTick en même temps, plafonné à ${MAX_ORPHAN_PUSH_PER_RUN} par passage (garde-fou).`);
     orphanPages = orphanPages.slice(0, MAX_ORPHAN_PUSH_PER_RUN);
   }
 
@@ -494,7 +523,7 @@ async function syncProject(project) {
         await notionFetch(`/pages/${page.id}`, { method: 'PATCH', body: JSON.stringify({ properties }) });
         stats.toNotionUpdated++;
       } else {
-        const payload = buildTicktickPayloadFromPage(page, project.schema, projectIndex);
+        const payload = buildTicktickPayloadFromPage(page, project.schema, projectIndex, knownTagSpellings);
         const checked = getChecked(page);
         const currentlyDone = task.status === 2;
 
@@ -537,7 +566,7 @@ async function syncProject(project) {
     const title = getTitle(page, project.schema);
     if (!title) continue; // page vide (juste créée), on attend qu'elle ait un titre
     try {
-      const payload = buildTicktickPayloadFromPage(page, project.schema, projectIndex);
+      const payload = buildTicktickPayloadFromPage(page, project.schema, projectIndex, knownTagSpellings);
       const created = await ticktickFetch('/task', {
         method: 'POST',
         body: JSON.stringify({ projectId: project.ticktickProjectId, ...payload }),
