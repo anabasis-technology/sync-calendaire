@@ -25,15 +25,18 @@ Fait partie du projet "Sync Calendaire" (voir la page Notion dédiée dans la ba
 
 ## Créer une tâche depuis Notion
 
-Ajouter une page dans `✅ Tâches Freelance` ou `Personnel` ne suffit PAS à créer une tâche
-TickTick automatiquement — il faut cocher la case **"→ TickTick"** sur cette page. Au
-passage suivant, la tâche est créée côté TickTick, la case se décoche, et la page reçoit son
-TickTick ID.
+Ajouter une page dans `✅ Tâches Freelance` ou `Personnel` crée automatiquement la tâche
+TickTick correspondante au passage suivant (pas de case à cocher) — la page reçoit alors son
+TickTick ID. Un plafond de 5 créations par passage (`MAX_ORPHAN_PUSH_PER_RUN`) protège contre
+tout pic anormal (import en masse, bug amont) : le reste suit automatiquement sur les
+passages suivants, sans intervention.
 
-Ce garde-fou est volontaire et non négociable : sans lui, toute page sans TickTick ID
-(des années de contenu pré-existant dans une base comme `Personnel`, par exemple) serait
-interprétée comme "à créer" et dupliquée en masse dans TickTick. C'est exactement ce qui
-s'est produit avant l'ajout de ce garde-fou (voir historique de la page Notion du projet).
+Ce plafond existe suite à un incident réel : avant sa mise en place, une page Notion sans
+TickTick ID était interprétée comme "à créer" sans limite, ce qui a dupliqué en masse des
+années de contenu pré-existant dans `Personnel` (voir historique de la page Notion du projet).
+Le backlog historique de `Personnel` a depuis été déplacé vers une base séparée
+(`Archives Perso Historique`, hors sync) le 27/08/2026, ce qui a permis d'activer la création
+automatique sur cette base aussi, en toute sécurité grâce au plafond.
 
 ## Pourquoi 5 minutes, pas plus rapide ?
 
