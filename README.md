@@ -1,18 +1,39 @@
-# Sync Calendaire — TickTick → Notion
+# Sync Calendaire — TickTick ↔ Notion
 
-Synchronisation automatique, unidirectionnelle et gratuite des tâches TickTick vers Notion.
+Synchronisation bidirectionnelle et gratuite entre TickTick et Notion.
 Fait partie du projet "Sync Calendaire" (voir la page Notion dédiée dans la base ⚡ Workflow).
 
 ## Principe
 
-- **TickTick** reste la seule source de vérité pour les tâches (créées à la voix via Alexa,
-  depuis l'app, peu importe).
-- Ce script lit les listes TickTick `Freelance` et `Personnel` toutes les 5 minutes via
-  [GitHub Actions](.github/workflows/sync.yml) et crée/met à jour les pages correspondantes
-  dans les bases Notion `⚡ Workflow` et `Personnel`.
-- Le sens est unique : Notion n'est jamais réécrit vers TickTick. Pas de boucle possible.
+- Deux listes TickTick (`Freelance`, `Personnel`) sont synchronisées avec deux bases Notion
+  (`✅ Tâches Freelance`, `Personnel`) toutes les 5 minutes via
+  [GitHub Actions](.github/workflows/sync.yml).
+- **Bidirectionnel** : éditer le titre, la date, les tags, la description ou cocher "fait"
+  d'un côté se répercute de l'autre, et inversement.
+- **Détection des changements par empreinte de contenu**, pas par horodatage. Notion arrondit
+  `last_edited_time` à la seconde et TickTick ne met pas toujours à jour `modifiedTime` après
+  une modification via l'API (constaté empiriquement) — aucun des deux horodatages n'est fiable
+  comme unique signal. Chaque page Notion stocke donc "Sync Snapshot", une empreinte JSON des
+  champs synchronisables telle qu'on l'a vue en dernier des deux côtés à la fois.
+- **Conflit** (les deux côtés modifiés dans la même fenêtre de 5 min) : TickTick gagne, par
+  convention simple plutôt que de deviner qui est "le plus récent" sans horodatage fiable.
+- `⚡ Workflow` (les projets : AMGE, BrainUp, etc.) n'est jamais touché par ce sync — seule la
+  relation "Projet" sur `✅ Tâches Freelance` s'y connecte, via une correspondance tag TickTick
+  ↔ nom de projet.
 - Les sous-tâches (checklist items rattachés à une tâche parente) ne sont pas synchronisées
   individuellement.
+
+## Créer une tâche depuis Notion
+
+Ajouter une page dans `✅ Tâches Freelance` ou `Personnel` ne suffit PAS à créer une tâche
+TickTick automatiquement — il faut cocher la case **"→ TickTick"** sur cette page. Au
+passage suivant, la tâche est créée côté TickTick, la case se décoche, et la page reçoit son
+TickTick ID.
+
+Ce garde-fou est volontaire et non négociable : sans lui, toute page sans TickTick ID
+(des années de contenu pré-existant dans une base comme `Personnel`, par exemple) serait
+interprétée comme "à créer" et dupliquée en masse dans TickTick. C'est exactement ce qui
+s'est produit avant l'ajout de ce garde-fou (voir historique de la page Notion du projet).
 
 ## Pourquoi 5 minutes, pas plus rapide ?
 
@@ -26,6 +47,22 @@ Aucune donnée personnelle ne transite par le dépôt lui-même : le code ne fai
 via API à la volée, et n'écrit jamais de contenu de tâche dans les logs (dépôt public = logs
 publics).
 
+## Limites connues
+
+- **Suppression TickTick → Notion : best-effort, pas fiable.** L'API TickTick ne permet pas
+  de distinguer proprement "tâche supprimée" de "tâche complétée" (`/project/{id}/data`
+  exclut les deux), et son endpoint individuel `GET .../task/{id}` a été observé renvoyant
+  un succès même après suppression confirmée. Le script vérifie individuellement avant
+  d'archiver un miroir Notion, ce qui rend l'archivage quasi inopérant en pratique — c'est le
+  compromis de sécurité assumé : ne jamais archiver à tort plutôt que nettoyer à coup sûr.
+  Une page Notion dont la tâche TickTick a été vraiment supprimée peut donc rester visible ;
+  à nettoyer manuellement si besoin.
+- **Suppression Notion → TickTick : jamais faite.** Archiver une page Notion ne supprime
+  jamais la tâche TickTick correspondante — TickTick reste la donnée de référence.
+- **Champ `completedTime` de TickTick non fiable comme indicateur d'état courant** : il reste
+  renseigné même après réouverture d'une tâche. Seul le champ `status` fait foi (géré
+  correctement dans le script).
+
 ## Secrets requis
 
 À configurer dans *Settings → Secrets and variables → Actions* :
@@ -33,10 +70,10 @@ publics).
 - `TICKTICK_TOKEN` — jeton d'accès OAuth TickTick (app "Sync Calendaire" sur
   [developer.ticktick.com](https://developer.ticktick.com/manage)). **Expire au bout
   d'environ 180 jours, sans refresh token** — il faudra relancer le flux d'autorisation
-  manuellement à ce moment-là.
+  manuellement à ce moment-là (rappel programmé pour le 24/01/2027).
 - `NOTION_TOKEN` — jeton de la connexion interne Notion "Sync Calendaire"
   ([notion.so/profile/integrations](https://www.notion.so/profile/integrations)), partagée
-  avec les bases `⚡ Workflow` et `Personnel`.
+  avec les bases `✅ Tâches Freelance` et `Personnel`.
 
 ## Maintenance
 
