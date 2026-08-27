@@ -59,9 +59,10 @@ const PROJECTS = [
     notionDataSourceId: '24eab52f-34f1-8152-92af-000b75158c4a',
     schema: 'personnel',
     matchProjects: false,
-    // Base ancienne avec des années de contenu manuel sans lien avec ce sync : la case
-    // "→ TickTick" reste un garde-fou obligatoire ici, ne jamais rendre automatique.
-    autoCreateWithoutFlag: false,
+    // Le backlog historique (247 pages cochées + doublons) a été déplacé vers la base
+    // "Archives Perso Historique" le 27/08/2026 : la base ne contient plus que des tâches
+    // actives, la création automatique est donc sûre ici aussi (voir page Notion du projet).
+    autoCreateWithoutFlag: true,
   },
 ];
 
