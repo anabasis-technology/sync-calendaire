@@ -31,11 +31,35 @@
 
 const TICKTICK_TOKEN = process.env.TICKTICK_TOKEN;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const GOOGLE_REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
 const NOTION_VERSION = '2025-09-03';
 const DEFAULT_TIMEZONE = 'Europe/Paris';
 const ORPHAN_PUSH_FLAG_PROP = '→ TickTick';
 const MAX_ORPHAN_PUSH_PER_RUN = 5;
 const MAX_NEW_PROJECTS_PER_RUN = 3;
+const MAX_GCAL_DELETIONS_PER_RUN = 5;
+const MAX_GCAL_INCOMING_PER_RUN = 5;
+// Un évènement GCal encore loin dans le futur (ex. la 50e occurrence d'une série
+// récurrente) n'a pas besoin d'exister comme tâche TickTick tout de suite : seules les
+// occurrences dans cette fenêtre sont importées, le reste suit au fil des passages suivants
+// à mesure qu'elles s'en approchent (incident constaté le 27/08/2026 : sans cette fenêtre,
+// une série "Publisher of the week" a créé 39 tâches en un seul passage avant d'être stoppée).
+const GCAL_INCOMING_LOOKAHEAD_DAYS = 14;
+
+// Un TickTick <-> Google Calendar par calendrier, TickTick restant le relais central (une
+// modif dans Notion remonte à TickTick puis redescend vers GCal, et inversement). Périmètre
+// volontairement limité à "aujourd'hui et après" des deux côtés : ni import de l'historique
+// des calendriers (des séries récurrentes vieilles de plusieurs années y vivent, cf. page
+// Notion du projet), ni tâche TickTick en retard poussée vers GCal. Une tâche qui devient
+// en retard voit simplement son évènement GCal disparaître.
+const GCAL_CALENDARS = [
+  { name: 'Freelance AMGE - ENOVEA', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks', projectMatchKey: 'amge' },
+  { name: 'FreeLance', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks', timedOnly: true },
+  { name: 'Freelance To Do', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks', timedOnly: false },
+  { name: 'To Do List', ticktickProjectId: '67ee6a2c8f082fe808671e3c', schema: 'personnel' },
+];
 
 const WORKFLOW_DATA_SOURCE_ID = '2f0ab52f-34f1-80b8-b9ce-000b7a24fb71';
 // Projet "fourre-tout" (créé le 27/08/2026) : une tâche freelance sans tag correspondant à
@@ -131,6 +155,43 @@ async function notionFetch(path, options = {}) {
   return res.json();
 }
 
+let cachedGoogleAccessToken = null;
+async function getGoogleAccessToken() {
+  if (cachedGoogleAccessToken) return cachedGoogleAccessToken;
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      refresh_token: GOOGLE_REFRESH_TOKEN,
+      grant_type: 'refresh_token',
+    }),
+  });
+  if (!res.ok) throw new Error(`rafraîchissement du jeton Google a échoué: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  cachedGoogleAccessToken = data.access_token;
+  return cachedGoogleAccessToken;
+}
+
+async function gcalFetch(path, options = {}) {
+  const token = await getGoogleAccessToken();
+  const res = await fetch(`https://www.googleapis.com/calendar/v3${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Google Calendar API a répondu ${res.status}${body ? ` (${body.slice(0, 150)})` : ''}`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
 // ---------- Dates : TickTick (instant UTC "journée entière") <-> Notion (date locale) ----------
 
 function ticktickAllDayToNotionDate(isoUtc, timeZone) {
@@ -162,6 +223,28 @@ function notionDateToTicktickAllDay(dateStr, timeZone) {
 
 function notionDateTimeToTicktickInstant(isoWithOffset) {
   return new Date(isoWithOffset).toISOString().replace(/\.\d{3}Z$/, '+0000');
+}
+
+function addDaysToDateString(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+function isBeforeToday(isoInstant) {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  return new Date(isoInstant) < startOfToday;
+}
+
+// TickTick ("...+0000") et Notion ("...+00:00") sérialisent le même instant avec un
+// décalage horaire écrit différemment (deux-points ou non) : comparer ces chaînes brutes
+// pour une tâche avec horaire précis ne s'équilibre jamais, même à contenu strictement
+// identique (bug constaté le 27/08/2026, la première tâche freelance à horaire réel ayant
+// jamais transité par ce chemin — jusque-là tout passait par la branche "journée entière",
+// déjà correcte). On canonicalise donc systématiquement tout instant avant de le comparer
+// ou de le stocker dans une empreinte, qu'elle soit côté Notion<->TickTick ou GCal.
+function canonicalInstant(value) {
+  return new Date(value).toISOString();
 }
 
 // ---------- Lecture des projets ⚡ Workflow (pour la relation Projet) ----------
@@ -286,9 +369,13 @@ function snapshotOf({ title, date, tags, description, checked, projet, priority 
 
 function computeNotionSnapshot(page, schema) {
   const dateValue = page.properties?.[pageDateProp(schema)]?.date;
+  // Notion sérialise un horaire en "+00:00" (deux-points) ; TickTick en "+0000" (voir
+  // canonicalInstant). Ne canoniser que si un horaire est présent : une date seule
+  // ("2026-08-27") ne doit pas se voir attribuer artificiellement un horaire minuit.
+  const dateStart = dateValue ? (dateValue.start.includes('T') ? canonicalInstant(dateValue.start) : dateValue.start) : null;
   return snapshotOf({
     title: getTitle(page, schema),
-    date: dateValue ? dateValue.start : null,
+    date: dateStart,
     tags: getTags(page),
     description: getDescription(page),
     checked: getChecked(page),
@@ -319,7 +406,7 @@ function ticktickDerivedFields(task, schema, projectIndex) {
   const { genericTags, projectPageId } = splitTagsAndProject(task.tags, schema, projectIndex);
   const rawDate = task.dueDate || task.startDate;
   const dateStart = rawDate
-    ? (task.isAllDay ? ticktickAllDayToNotionDate(rawDate, task.timeZone) : rawDate)
+    ? (task.isAllDay ? ticktickAllDayToNotionDate(rawDate, task.timeZone) : canonicalInstant(rawDate))
     : null;
   return {
     title: task.title || '(sans titre)',
@@ -420,6 +507,342 @@ function buildTicktickPayloadFromPage(page, schema, projectIndex, knownTagSpelli
   }
 
   return payload;
+}
+
+// ---------- Google Calendar : lecture des calendriers, empreintes, routage ----------
+
+async function loadCalendarIdsByName() {
+  const byName = new Map();
+  let pageToken;
+  do {
+    const params = new URLSearchParams({ maxResults: '250' });
+    if (pageToken) params.set('pageToken', pageToken);
+    const data = await gcalFetch(`/users/me/calendarList?${params}`);
+    for (const cal of data.items || []) byName.set(cal.summary, cal.id);
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return byName;
+}
+
+function gcalEventFields(event) {
+  const isAllDay = !!(event.start?.date && !event.start?.dateTime);
+  return {
+    title: event.summary || '(sans titre)',
+    isAllDay,
+    start: isAllDay ? event.start.date : canonicalInstant(event.start.dateTime),
+    end: isAllDay ? event.end.date : canonicalInstant(event.end.dateTime),
+  };
+}
+
+function gcalSnapshotOf(fields) {
+  return JSON.stringify({ title: fields.title, isAllDay: fields.isAllDay, start: fields.start, end: fields.end });
+}
+
+function gcalEventBody(fields) {
+  if (fields.isAllDay) {
+    return { summary: fields.title, start: { date: fields.start }, end: { date: fields.end } };
+  }
+  return {
+    summary: fields.title,
+    start: { dateTime: fields.start, timeZone: fields.timeZone || DEFAULT_TIMEZONE },
+    end: { dateTime: fields.end, timeZone: fields.timeZone || DEFAULT_TIMEZONE },
+  };
+}
+
+// Traduit une tâche TickTick en champs comparables à un évènement GCal. Retourne null si la
+// tâche n'a pas de date, ou si sa date est passée (une tâche en retard sort du périmètre du
+// miroir GCal plutôt que d'y laisser un évènement obsolète).
+function ticktickToGcalFields(task) {
+  const rawStart = task.startDate || task.dueDate;
+  if (!rawStart) return null;
+  if (task.isAllDay) {
+    const dateStr = ticktickAllDayToNotionDate(rawStart, task.timeZone);
+    if (isBeforeToday(`${dateStr}T00:00:00`)) return null;
+    return { title: task.title || '(sans titre)', isAllDay: true, start: dateStr, end: addDaysToDateString(dateStr, 1) };
+  }
+  if (isBeforeToday(rawStart)) return null;
+  const start = canonicalInstant(rawStart);
+  let end = canonicalInstant(task.dueDate || task.startDate);
+  if (end === start) {
+    // Pas de vraie durée côté TickTick : créneau de 30 min par défaut, uniquement pour
+    // l'affichage GCal (ne modifie rien côté TickTick/Notion).
+    end = canonicalInstant(new Date(rawStart).getTime() + 30 * 60000);
+  }
+  return { title: task.title || '(sans titre)', isAllDay: false, start, end, timeZone: task.timeZone || DEFAULT_TIMEZONE };
+}
+
+// Un tag qui correspond à un projet Workflow connu (ex. "amge"), s'il y en a un.
+function ticktickTaskProjectMatchKey(task, projectIndex) {
+  for (const tag of task.tags || []) {
+    const key = normalize(tag);
+    if (projectIndex && projectIndex.byNormalizedTitle.has(key)) return key;
+  }
+  return null;
+}
+
+function taskBelongsToCalendar(task, calConfig, projectIndex) {
+  if (calConfig.schema === 'personnel') return true;
+  const projectMatchKey = ticktickTaskProjectMatchKey(task, projectIndex);
+  if (calConfig.projectMatchKey) return projectMatchKey === calConfig.projectMatchKey;
+  // "anabasis" est le projet fourre-tout par défaut (voir DEFAULT_PROJECT_ID), pas un
+  // client précis : une tâche qui le porte (explicitement, ou repoussée en tag par le sync
+  // Notion -> TickTick) reste dans le lot par défaut FreeLance/Freelance To Do, pas exclue.
+  if (projectMatchKey && projectMatchKey !== 'anabasis') return false; // projet précis -> son propre calendrier (ex. AMGE)
+  const hasPreciseTime = !task.isAllDay;
+  return calConfig.timedOnly ? hasPreciseTime : !hasPreciseTime;
+}
+
+// ---------- Google Calendar : sync d'un calendrier <-> une liste TickTick ----------
+
+async function syncGoogleCalendarProject(calConfig, calendarId, tasks, projectIndex, stats) {
+  const scopedTasks = tasks.filter((t) => taskBelongsToCalendar(t, calConfig, projectIndex));
+  const tasksById = new Map(scopedTasks.map((t) => [t.id, t]));
+
+  const timeMin = new Date();
+  timeMin.setHours(0, 0, 0, 0);
+  const timeMax = new Date(Date.now() + 365 * 86400000);
+
+  const events = [];
+  let pageToken;
+  do {
+    const params = new URLSearchParams({
+      maxResults: '250', singleEvents: 'true', showDeleted: 'true',
+      timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(),
+    });
+    if (pageToken) params.set('pageToken', pageToken);
+    const result = await gcalFetch(`/calendars/${encodeURIComponent(calendarId)}/events?${params}`);
+    events.push(...(result.items || []));
+    pageToken = result.nextPageToken;
+  } while (pageToken);
+
+  // A) Évènements GCal actifs sans lien connu -> nouvelle tâche TickTick (jamais pour du
+  // passé : timeMin=aujourd'hui filtre déjà l'historique du calendrier à la source). Limité
+  // aux occurrences proches (voir GCAL_INCOMING_LOOKAHEAD_DAYS) et plafonné par passage :
+  // une série récurrente ne doit pas déverser tout son futur en un seul coup.
+  const incomingCutoff = new Date(Date.now() + GCAL_INCOMING_LOOKAHEAD_DAYS * 86400000);
+  let incomingCreated = 0;
+  for (const ev of events) {
+    if (ev.status === 'cancelled' || ev.extendedProperties?.private?.ticktickId) continue;
+    const evStart = new Date(ev.start?.dateTime || ev.start?.date);
+    // timeMin filtre côté Google sur la fin de l'évènement, pas son début (constaté le
+    // 27/08/2026 sur un évènement multi-jours déjà en cours) : un évènement commencé avant
+    // aujourd'hui peut donc quand même apparaître ici. On refiltre explicitement sur le début.
+    if (evStart < timeMin || evStart > incomingCutoff) continue;
+    if (incomingCreated >= MAX_GCAL_INCOMING_PER_RUN) {
+      console.error(`[GCal ${calConfig.name}] création TickTick depuis évènement ${ev.id} ignorée : plafond de ${MAX_GCAL_INCOMING_PER_RUN} par passage atteint.`);
+      continue;
+    }
+    try {
+      const fields = gcalEventFields(ev);
+      const payload = {
+        title: fields.title,
+        content: ev.description || '',
+        tags: calConfig.projectTag ? [calConfig.projectTag] : [],
+        timeZone: DEFAULT_TIMEZONE,
+      };
+      if (fields.isAllDay) {
+        payload.isAllDay = true;
+        payload.startDate = notionDateToTicktickAllDay(fields.start, DEFAULT_TIMEZONE);
+        payload.dueDate = payload.startDate;
+      } else {
+        payload.isAllDay = false;
+        payload.startDate = notionDateTimeToTicktickInstant(fields.start);
+        payload.dueDate = notionDateTimeToTicktickInstant(fields.end);
+      }
+      const created = await ticktickFetch('/task', { method: 'POST', body: JSON.stringify({ projectId: calConfig.ticktickProjectId, ...payload }) });
+      await sleep(300);
+      await gcalFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${ev.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ extendedProperties: { private: { ticktickId: created.id, syncSnapshot: gcalSnapshotOf(fields) } } }),
+      });
+      stats.fromGcalCreated++;
+      incomingCreated++;
+      await sleep(300);
+    } catch (err) {
+      console.error(`[GCal ${calConfig.name}] échec création TickTick depuis évènement ${ev.id}: ${err.message}`);
+      stats.errors++;
+    }
+  }
+
+  const eventsByTicktickId = new Map();
+  for (const ev of events) {
+    const ttId = ev.extendedProperties?.private?.ticktickId;
+    if (ttId) eventsByTicktickId.set(ttId, ev);
+  }
+
+  // B) Tâches TickTick du périmètre -> évènement GCal à créer, mettre à jour ou supprimer.
+  for (const task of scopedTasks) {
+    const fields = ticktickToGcalFields(task);
+    const existing = eventsByTicktickId.get(task.id);
+
+    if (!fields) {
+      if (existing && existing.status !== 'cancelled') {
+        try {
+          await gcalFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${existing.id}`, { method: 'DELETE' });
+          stats.gcalDeleted++;
+          await sleep(300);
+        } catch (err) {
+          console.error(`[GCal ${calConfig.name}] échec suppression évènement (tâche ${task.id} sans date pertinente): ${err.message}`);
+          stats.errors++;
+        }
+      }
+      continue;
+    }
+
+    if (!existing) {
+      try {
+        const body = { ...gcalEventBody(fields), extendedProperties: { private: { ticktickId: task.id, syncSnapshot: gcalSnapshotOf(fields) } } };
+        await gcalFetch(`/calendars/${encodeURIComponent(calendarId)}/events`, { method: 'POST', body: JSON.stringify(body) });
+        stats.gcalCreated++;
+        await sleep(300);
+      } catch (err) {
+        console.error(`[GCal ${calConfig.name}] échec création évènement pour tâche ${task.id}: ${err.message}`);
+        stats.errors++;
+      }
+      continue;
+    }
+
+    if (existing.status === 'cancelled') {
+      // Évènement supprimé côté GCal par l'utilisateur -> on supprime la tâche TickTick.
+      if (stats.gcalTriggeredDeletes >= MAX_GCAL_DELETIONS_PER_RUN) {
+        console.error(`[GCal ${calConfig.name}] suppression de la tâche ${task.id} ignorée : plafond de ${MAX_GCAL_DELETIONS_PER_RUN} suppressions par passage atteint.`);
+        continue;
+      }
+      try {
+        await ticktickFetch(`/project/${calConfig.ticktickProjectId}/task/${task.id}`, { method: 'DELETE' });
+        stats.gcalTriggeredDeletes++;
+        await sleep(300);
+      } catch (err) {
+        console.error(`[GCal ${calConfig.name}] échec suppression TickTick suite à évènement supprimé ${existing.id}: ${err.message}`);
+        stats.errors++;
+      }
+      continue;
+    }
+
+    // Les deux existent : comparaison d'empreinte, TickTick gagne en cas de conflit.
+    const storedSnapshot = existing.extendedProperties?.private?.syncSnapshot || null;
+    const currentGcalSnapshot = gcalSnapshotOf(gcalEventFields(existing));
+    const currentTicktickSnapshot = gcalSnapshotOf(fields);
+    if (storedSnapshot === currentGcalSnapshot && storedSnapshot === currentTicktickSnapshot) continue;
+
+    const ticktickChanged = currentTicktickSnapshot !== storedSnapshot;
+
+    if (ticktickChanged) {
+      try {
+        await gcalFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${existing.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ ...gcalEventBody(fields), extendedProperties: { private: { ticktickId: task.id, syncSnapshot: currentTicktickSnapshot } } }),
+        });
+        stats.gcalUpdated++;
+        await sleep(300);
+      } catch (err) {
+        console.error(`[GCal ${calConfig.name}] échec mise à jour évènement pour tâche ${task.id}: ${err.message}`);
+        stats.errors++;
+      }
+    } else {
+      try {
+        const gcalFieldsNow = gcalEventFields(existing);
+        await ticktickFetch(`/task/${task.id}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            id: task.id,
+            projectId: task.projectId,
+            title: gcalFieldsNow.title,
+            isAllDay: gcalFieldsNow.isAllDay,
+            timeZone: task.timeZone || DEFAULT_TIMEZONE,
+            startDate: gcalFieldsNow.isAllDay
+              ? notionDateToTicktickAllDay(gcalFieldsNow.start, DEFAULT_TIMEZONE)
+              : notionDateTimeToTicktickInstant(gcalFieldsNow.start),
+            dueDate: gcalFieldsNow.isAllDay
+              ? notionDateToTicktickAllDay(gcalFieldsNow.start, DEFAULT_TIMEZONE)
+              : notionDateTimeToTicktickInstant(gcalFieldsNow.end),
+          }),
+        });
+        await sleep(300);
+        await gcalFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${existing.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ extendedProperties: { private: { ticktickId: task.id, syncSnapshot: currentGcalSnapshot } } }),
+        });
+        stats.ticktickUpdatedFromGcal++;
+        await sleep(300);
+      } catch (err) {
+        console.error(`[GCal ${calConfig.name}] échec mise à jour TickTick depuis évènement ${existing.id}: ${err.message}`);
+        stats.errors++;
+      }
+    }
+  }
+
+  // C) Évènements GCal encore actifs dont la tâche a disparu du périmètre (complétée ou
+  // supprimée côté TickTick) -> vérification individuelle puis suppression de l'évènement.
+  // /project/{id}/data exclut les tâches complétées : "absente" ne veut pas dire "supprimée"
+  // (même prudence que pour l'archivage Notion, voir syncProject).
+  for (const ev of events) {
+    const ttId = ev.extendedProperties?.private?.ticktickId;
+    if (!ttId || ev.status === 'cancelled' || tasksById.has(ttId)) continue;
+    try {
+      const fetched = await ticktickFetch(`/project/${calConfig.ticktickProjectId}/task/${ttId}`);
+      await sleep(300);
+      const isGoneOrDone = fetched.__notFound || fetched.status === 2;
+      if (!isGoneOrDone) continue;
+      await gcalFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${ev.id}`, { method: 'DELETE' });
+      stats.gcalDeleted++;
+      await sleep(300);
+    } catch (err) {
+      console.error(`[GCal ${calConfig.name}] échec suppression évènement pour tâche disparue ${ttId}: ${err.message}`);
+      stats.errors++;
+    }
+  }
+}
+
+async function syncGoogleCalendar() {
+  const stats = { gcalCreated: 0, gcalUpdated: 0, gcalDeleted: 0, fromGcalCreated: 0, ticktickUpdatedFromGcal: 0, gcalTriggeredDeletes: 0, errors: 0 };
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
+    console.log('[Google Calendar] secrets absents, sync ignorée.');
+    return stats;
+  }
+
+  let projectIndex;
+  let calendarIdsByName;
+  try {
+    projectIndex = await loadWorkflowProjects();
+    calendarIdsByName = await loadCalendarIdsByName();
+  } catch (err) {
+    console.error(`[Google Calendar] initialisation impossible: ${err.message}`);
+    stats.errors++;
+    return stats;
+  }
+
+  const taskCache = new Map();
+  async function getTasks(ticktickProjectId) {
+    if (!taskCache.has(ticktickProjectId)) {
+      const data = await ticktickFetch(`/project/${ticktickProjectId}/data`);
+      taskCache.set(ticktickProjectId, (data.tasks || []).filter((t) => !t.parentId));
+    }
+    return taskCache.get(ticktickProjectId);
+  }
+
+  for (const calConfig of GCAL_CALENDARS) {
+    const calendarId = calendarIdsByName.get(calConfig.name);
+    if (!calendarId) {
+      console.error(`[Google Calendar] calendrier "${calConfig.name}" introuvable dans la liste des agendas.`);
+      stats.errors++;
+      continue;
+    }
+    let projectTag = null;
+    if (calConfig.projectMatchKey) {
+      const projectId = projectIndex.byNormalizedTitle.get(calConfig.projectMatchKey);
+      projectTag = projectId ? projectIndex.titleById.get(projectId) : calConfig.projectMatchKey;
+    }
+    try {
+      const tasks = await getTasks(calConfig.ticktickProjectId);
+      await syncGoogleCalendarProject({ ...calConfig, projectTag }, calendarId, tasks, projectIndex, stats);
+    } catch (err) {
+      console.error(`[Google Calendar] échec sync "${calConfig.name}": ${err.message}`);
+      stats.errors++;
+    }
+  }
+
+  return stats;
 }
 
 // ---------- Sync d'un projet (une liste TickTick <-> une base Notion) ----------
@@ -649,7 +1072,15 @@ async function main() {
     process.exit(1);
   }
 
-  let hadErrors = false;
+  const gcalStats = await syncGoogleCalendar();
+  console.log(
+    `[Google Calendar] créées: ${gcalStats.gcalCreated}, mises à jour: ${gcalStats.gcalUpdated}, ` +
+    `supprimées: ${gcalStats.gcalDeleted}, TickTick créées depuis GCal: ${gcalStats.fromGcalCreated}, ` +
+    `TickTick mises à jour depuis GCal: ${gcalStats.ticktickUpdatedFromGcal}, ` +
+    `tâches supprimées (évènement effacé): ${gcalStats.gcalTriggeredDeletes}, erreurs: ${gcalStats.errors}`
+  );
+
+  let hadErrors = gcalStats.errors > 0;
   for (const project of PROJECTS) {
     const stats = await syncProject(project);
     console.log(
