@@ -62,6 +62,12 @@ const TAG_MAP = {
   personnel: { gcal: 'GCal', adm: 'ADM', anabasis: 'Anabasis', finance: 'Finance', comptabilité: 'Comptabilité', bug: 'BUG' },
 };
 
+// Échelle TickTick standard (identique dans toutes leurs apps) : 0/1/3/5, jamais 2/4.
+// Vérifié sur données réelles le 27/08/2026 (priority:3 = "Medium Priority" et priority:5 =
+// "High Priority" dans l'ancien système). Uniquement sur Tâches Freelance pour l'instant.
+const PRIORITY_TO_NOTION = { 0: 'Aucune', 1: 'Basse', 3: 'Moyenne', 5: 'Haute' };
+const PRIORITY_FROM_NOTION = { Aucune: 0, Basse: 1, Moyenne: 3, Haute: 5 };
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -203,6 +209,10 @@ function getChecked(page) {
 function getProjetRelationId(page) {
   return page.properties?.Projet?.relation?.[0]?.id || null;
 }
+function getPriority(page, schema) {
+  if (schema !== 'freelanceTasks') return null;
+  return page.properties?.Priorité?.select?.name || 'Aucune';
+}
 function getStoredSnapshot(page) {
   return page.properties?.['Sync Snapshot']?.rich_text?.[0]?.plain_text || null;
 }
@@ -212,8 +222,8 @@ function getStoredSnapshot(page) {
 // computeTicktickSnapshot(task). C'est ce qui permet de détecter "qui a changé" sans
 // dépendre d'un horodatage d'aucun des deux systèmes.
 
-function snapshotOf({ title, date, tags, description, checked, projet }) {
-  return JSON.stringify({ title, date, tags: tags.slice().sort(), description, checked, projet });
+function snapshotOf({ title, date, tags, description, checked, projet, priority }) {
+  return JSON.stringify({ title, date, tags: tags.slice().sort(), description, checked, projet, priority });
 }
 
 function computeNotionSnapshot(page, schema) {
@@ -225,6 +235,7 @@ function computeNotionSnapshot(page, schema) {
     description: getDescription(page),
     checked: getChecked(page),
     projet: schema === 'freelanceTasks' ? getProjetRelationId(page) : null,
+    priority: getPriority(page, schema),
   });
 }
 
@@ -261,6 +272,7 @@ function ticktickDerivedFields(task, schema, projectIndex) {
     // quand on rouvre une tâche (vérifié empiriquement). Seul task.status fait foi.
     checked: task.status === 2,
     projet: schema === 'freelanceTasks' ? projectPageId : null,
+    priority: schema === 'freelanceTasks' ? (PRIORITY_TO_NOTION[task.priority] || 'Aucune') : null,
   };
 }
 
@@ -288,6 +300,7 @@ function buildNotionPropertiesFromTask(task, schema, projectIndex) {
 
   if (schema === 'freelanceTasks') {
     properties.Projet = { relation: fields.projet ? [{ id: fields.projet }] : [] };
+    properties.Priorité = { select: { name: fields.priority } };
   }
 
   return properties;
@@ -310,6 +323,9 @@ function buildTicktickPayloadFromPage(page, schema, projectIndex) {
   }
 
   const payload = { title: title || '(sans titre)', content: description, tags, timeZone: DEFAULT_TIMEZONE };
+  if (schema === 'freelanceTasks') {
+    payload.priority = PRIORITY_FROM_NOTION[getPriority(page, schema)] ?? 0;
+  }
 
   const dateValue = page.properties?.[pageDateProp(schema)]?.date;
   if (dateValue && dateValue.start) {
@@ -492,6 +508,7 @@ async function syncProject(project) {
             isAllDay: payload.isAllDay,
             startDate: payload.startDate,
             dueDate: payload.dueDate,
+            ...(payload.priority !== undefined ? { priority: payload.priority } : {}),
             ...(!checked && currentlyDone ? { status: 0 } : {}),
           }),
         });
