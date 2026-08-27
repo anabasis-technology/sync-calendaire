@@ -35,6 +35,7 @@ const NOTION_VERSION = '2025-09-03';
 const DEFAULT_TIMEZONE = 'Europe/Paris';
 const ORPHAN_PUSH_FLAG_PROP = '→ TickTick';
 const MAX_ORPHAN_PUSH_PER_RUN = 5;
+const MAX_NEW_PROJECTS_PER_RUN = 3;
 
 const WORKFLOW_DATA_SOURCE_ID = '2f0ab52f-34f1-80b8-b9ce-000b7a24fb71';
 // Projet "fourre-tout" (créé le 27/08/2026) : une tâche freelance sans tag correspondant à
@@ -69,8 +70,11 @@ const PROJECTS = [
 // TickTick renvoie/attend des tags en minuscules ; on les remappe vers les options exactes
 // (avec accents/casse) configurées côté Notion, et inversement.
 const TAG_MAP = {
-  freelanceTasks: { comptabilité: 'Comptabilité', bug: 'BUG', finance: 'Finance', anabasis: 'Anabasis', adm: 'ADM', article: 'Article' },
-  personnel: { gcal: 'GCal', adm: 'ADM', anabasis: 'Anabasis', finance: 'Finance', comptabilité: 'Comptabilité', bug: 'BUG' },
+  // Clés = forme normalize() du tag TickTick (sans accent) ; valeurs = libellé affiché dans
+  // le multi-select Notion. Une clé accentée ici ne matcherait jamais (bug constaté le
+  // 27/08/2026 : "comptabilité" était silencieusement ignoré depuis la mise en place du sync).
+  freelanceTasks: { comptabilite: 'Comptabilité', bug: 'BUG', finance: 'Finance', anabasis: 'Anabasis', adm: 'ADM', article: 'Article' },
+  personnel: { gcal: 'GCal', adm: 'ADM', anabasis: 'Anabasis', finance: 'Finance', comptabilite: 'Comptabilité', bug: 'BUG' },
 };
 
 // Échelle TickTick standard (identique dans toutes leurs apps) : 0/1/3/5, jamais 2/4.
@@ -180,6 +184,41 @@ async function loadWorkflowProjects() {
     await sleep(300);
   } while (cursor);
   return { byNormalizedTitle, titleById };
+}
+
+// Une étiquette TickTick qui ne correspond à aucun projet Workflow existant ni à un tag
+// générique connu (TAG_MAP) est traitée comme un projet manquant : on la crée dans Workflow
+// à la volée, pour ne pas avoir à créer le projet à la main avant de pouvoir tagger une tâche.
+// Plafonné comme les autres créations en masse, par précaution (voir incident orphelins).
+async function createMissingWorkflowProjects(tasks, projectIndex, schema) {
+  if (!projectIndex) return 0;
+  const tagMap = TAG_MAP[schema] || {};
+  const seen = new Set();
+  let created = 0;
+  for (const task of tasks) {
+    for (const tag of task.tags || []) {
+      const key = normalize(tag);
+      if (seen.has(key) || projectIndex.byNormalizedTitle.has(key) || tagMap[key]) continue;
+      seen.add(key);
+      if (created >= MAX_NEW_PROJECTS_PER_RUN) {
+        console.error(`Nouvelle étiquette TickTick "${tag}" ignorée : plafond de ${MAX_NEW_PROJECTS_PER_RUN} nouveaux projets Workflow par passage atteint.`);
+        continue;
+      }
+      const result = await notionFetch('/pages', {
+        method: 'POST',
+        body: JSON.stringify({
+          parent: { type: 'data_source_id', data_source_id: WORKFLOW_DATA_SOURCE_ID },
+          properties: { 'Nom du projet': { title: [{ text: { content: tag } }] } },
+        }),
+      });
+      projectIndex.byNormalizedTitle.set(key, result.id);
+      projectIndex.titleById.set(result.id, tag);
+      created++;
+      console.log(`Nouveau projet Workflow créé depuis l'étiquette TickTick "${tag}".`);
+      await sleep(300);
+    }
+  }
+  return created;
 }
 
 async function loadAllPages(dataSourceId) {
@@ -381,7 +420,7 @@ function buildTicktickPayloadFromPage(page, schema, projectIndex, knownTagSpelli
 // ---------- Sync d'un projet (une liste TickTick <-> une base Notion) ----------
 
 async function syncProject(project) {
-  const stats = { toNotionCreated: 0, toNotionUpdated: 0, toTicktickCreated: 0, toTicktickUpdated: 0, archived: 0, seeded: 0, errors: 0 };
+  const stats = { toNotionCreated: 0, toNotionUpdated: 0, toTicktickCreated: 0, toTicktickUpdated: 0, archived: 0, seeded: 0, newProjects: 0, errors: 0 };
 
   let data;
   try {
@@ -398,6 +437,7 @@ async function syncProject(project) {
   if (project.matchProjects) {
     try {
       projectIndex = await loadWorkflowProjects();
+      stats.newProjects = await createMissingWorkflowProjects(data.tasks || [], projectIndex, project.schema);
     } catch (err) {
       console.error(`[${project.name}] lecture des projets Workflow impossible: ${err.message}`);
     }
@@ -610,7 +650,8 @@ async function main() {
     console.log(
       `[${project.name}] Notion créées: ${stats.toNotionCreated}, Notion mises à jour: ${stats.toNotionUpdated}, ` +
       `TickTick créées: ${stats.toTicktickCreated}, TickTick mises à jour: ${stats.toTicktickUpdated}, ` +
-      `archivées: ${stats.archived}, empreintes initialisées: ${stats.seeded}, erreurs: ${stats.errors}`
+      `archivées: ${stats.archived}, empreintes initialisées: ${stats.seeded}, nouveaux projets: ${stats.newProjects}, ` +
+      `erreurs: ${stats.errors}`
     );
     if (stats.errors > 0) hadErrors = true;
   }
