@@ -753,6 +753,7 @@ async function syncGoogleCalendarProject(calConfig, calendarId, tasks, projectIn
         await sleep(300);
       } catch (err) {
         console.error(`[GCal ${calConfig.name}] échec mise à jour évènement pour tâche ${task.id}: ${err.message}`);
+        console.error(`[DEBUG TEMP] task.startDate=${task.startDate} task.dueDate=${task.dueDate} task.isAllDay=${task.isAllDay} task.timeZone=${task.timeZone} fields.start=${fields.start} fields.end=${fields.end}`);
         stats.errors++;
       }
     } else {
