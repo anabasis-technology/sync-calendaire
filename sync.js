@@ -554,14 +554,20 @@ function gcalSnapshotOf(fields) {
   return JSON.stringify({ title: fields.title, isAllDay: fields.isAllDay, start: fields.start, end: fields.end });
 }
 
+// PATCH sur l'API Google Calendar fusionne les objets imbriqués au lieu de les remplacer :
+// si un évènement existant a "dateTime" (horaire précis) et qu'on lui envoie seulement
+// "date" (journée entière) pour basculer son type, les deux champs restent présents en
+// même temps côté Google -> rejeté avec "Invalid start time." (constaté le 29/09/2026 sur
+// une tâche ayant changé de type). On force donc explicitement à null le champ non utilisé
+// pour que Google le efface plutôt que de le laisser trainer.
 function gcalEventBody(fields) {
   if (fields.isAllDay) {
-    return { summary: fields.title, start: { date: fields.start }, end: { date: fields.end } };
+    return { summary: fields.title, start: { date: fields.start, dateTime: null }, end: { date: fields.end, dateTime: null } };
   }
   return {
     summary: fields.title,
-    start: { dateTime: fields.start, timeZone: fields.timeZone || DEFAULT_TIMEZONE },
-    end: { dateTime: fields.end, timeZone: fields.timeZone || DEFAULT_TIMEZONE },
+    start: { dateTime: fields.start, timeZone: fields.timeZone || DEFAULT_TIMEZONE, date: null },
+    end: { dateTime: fields.end, timeZone: fields.timeZone || DEFAULT_TIMEZONE, date: null },
   };
 }
 
@@ -753,7 +759,6 @@ async function syncGoogleCalendarProject(calConfig, calendarId, tasks, projectIn
         await sleep(300);
       } catch (err) {
         console.error(`[GCal ${calConfig.name}] échec mise à jour évènement pour tâche ${task.id}: ${err.message}`);
-        console.error(`[DEBUG TEMP] task.startDate=${task.startDate} task.dueDate=${task.dueDate} task.isAllDay=${task.isAllDay} task.timeZone=${task.timeZone} fields.start=${fields.start} fields.end=${fields.end}`);
         stats.errors++;
       }
     } else {
@@ -1097,8 +1102,15 @@ async function main() {
     `TickTick mises à jour depuis GCal: ${gcalStats.ticktickUpdatedFromGcal}, ` +
     `tâches supprimées (évènement effacé): ${gcalStats.gcalTriggeredDeletes}, erreurs: ${gcalStats.errors}`
   );
+  // Le pont Google Calendar reste le maillon le plus fragile (best-effort, voir README) : une
+  // erreur isolée dessus (ex. un cas limite sur une tâche précise) ne doit pas faire échouer
+  // tout le run ni spammer un mail d'échec toutes les 5 min, tant que Notion/TickTick (la
+  // synchro principale) tournent correctement. Visible dans les logs, mais non bloquant.
+  if (gcalStats.errors > 0) {
+    console.error(`[Google Calendar] ${gcalStats.errors} erreur(s) sur ce passage — voir logs ci-dessus, run non bloqué pour autant.`);
+  }
 
-  let hadErrors = gcalStats.errors > 0;
+  let hadErrors = false;
   for (const project of PROJECTS) {
     const stats = await syncProject(project);
     console.log(
