@@ -1,8 +1,12 @@
 name: Sync TickTick -> Notion
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'
+  # Cron natif GitHub retiré le 29/09/2026 : peu fiable (voir README), il
+  # échouait périodiquement et spammait des mails d'échec sans que le sync
+  # en dépende réellement. Le déclenchement toutes les 5 min se fait
+  # désormais via un cron externe gratuit (cron-job.org) qui appelle
+  # workflow_dispatch — zéro coût, zéro dépendance changée, juste moins
+  # de bruit.
   workflow_dispatch: {}
 
 jobs:
