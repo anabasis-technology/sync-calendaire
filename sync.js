@@ -41,6 +41,12 @@ const MAX_ORPHAN_PUSH_PER_RUN = 5;
 const MAX_NEW_PROJECTS_PER_RUN = 3;
 const MAX_GCAL_DELETIONS_PER_RUN = 5;
 const MAX_GCAL_INCOMING_PER_RUN = 5;
+// Fenêtre de protection après la création d'une page Notion par la synchro. Un automatisme
+// Notion (agent, modèle de base...) peut réécrire la date juste après la création : sans
+// protection, la synchro prend cette écriture pour une édition humaine et la propage vers
+// TickTick puis Google Calendar (constaté les 07-08/10/2026 : un agent "Mettre la date du
+// jour lors de la création" écrasait la date de rendez-vous importés depuis Google Calendar).
+const CREATION_GRACE_MS = 30 * 60 * 1000;
 // Un évènement GCal encore loin dans le futur (ex. la 50e occurrence d'une série
 // récurrente) n'a pas besoin d'exister comme tâche TickTick tout de suite : seules les
 // occurrences dans cette fenêtre sont importées, le reste suit au fil des passages suivants
@@ -423,6 +429,26 @@ function ticktickDerivedFields(task, schema, projectIndex) {
 
 function computeTicktickSnapshot(task, schema, projectIndex) {
   return snapshotOf(ticktickDerivedFields(task, schema, projectIndex));
+}
+
+// Garde-fou "fenêtre de création" : détecte une date réécrite côté Notion juste après la
+// création de la page par la synchro, alors que TickTick n'a pas bougé. Dans ce cas on ne
+// pousse PAS la date Notion vers TickTick (TickTick gagne, comme pour tout conflit) : on
+// renvoie la date mémorisée à restaurer dans Notion, ou undefined s'il n'y a rien à garder.
+// Ne concerne que la date : les autres champs édités dans la fenêtre suivent le flux normal.
+function dateOverwrittenAfterCreation({ page, stored, notionSnapshot, ticktickSnapshot, now = Date.now() }) {
+  if (stored === null || notionSnapshot === stored || ticktickSnapshot !== stored) return undefined;
+  const createdAt = Date.parse(page.created_time);
+  if (!Number.isFinite(createdAt) || now - createdAt >= CREATION_GRACE_MS) return undefined;
+  let storedDate;
+  let notionDate;
+  try {
+    storedDate = JSON.parse(stored).date ?? null;
+    notionDate = JSON.parse(notionSnapshot).date ?? null;
+  } catch {
+    return undefined; // empreinte illisible : on laisse le flux normal décider
+  }
+  return storedDate === notionDate ? undefined : { restoreDate: storedDate };
 }
 
 // Une tâche complétée dans TickTick n'a plus d'intérêt à rester visible dans Notion (confirmé
@@ -872,7 +898,7 @@ async function syncGoogleCalendar() {
 // ---------- Sync d'un projet (une liste TickTick <-> une base Notion) ----------
 
 async function syncProject(project) {
-  const stats = { toNotionCreated: 0, toNotionUpdated: 0, toTicktickCreated: 0, toTicktickUpdated: 0, archived: 0, seeded: 0, newProjects: 0, errors: 0 };
+  const stats = { toNotionCreated: 0, toNotionUpdated: 0, toTicktickCreated: 0, toTicktickUpdated: 0, archived: 0, seeded: 0, dateRestored: 0, newProjects: 0, errors: 0 };
 
   let data;
   try {
@@ -1003,6 +1029,24 @@ async function syncProject(project) {
         continue;
       }
 
+      const guard = dateOverwrittenAfterCreation({ page, stored, notionSnapshot, ticktickSnapshot });
+      if (guard) {
+        const editor = page.last_edited_by ? `${page.last_edited_by.type || '?'}:${page.last_edited_by.id}` : 'inconnu';
+        console.warn(
+          `[${project.name}] date réécrite dans Notion juste après la création de "${getTitle(page, project.schema)}" ` +
+          `(${JSON.parse(stored).date} -> ${JSON.parse(notionSnapshot).date}, dernier éditeur: ${editor}) : restaurée depuis TickTick.`
+        );
+        await notionFetch(`/pages/${page.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            properties: { [pageDateProp(project.schema)]: { date: guard.restoreDate ? { start: guard.restoreDate } : null } },
+          }),
+        });
+        stats.dateRestored++;
+        await sleep(300);
+        continue;
+      }
+
       const ticktickChanged = ticktickSnapshot !== stored;
       const notionChanged = notionSnapshot !== stored;
 
@@ -1116,7 +1160,7 @@ async function main() {
     console.log(
       `[${project.name}] Notion créées: ${stats.toNotionCreated}, Notion mises à jour: ${stats.toNotionUpdated}, ` +
       `TickTick créées: ${stats.toTicktickCreated}, TickTick mises à jour: ${stats.toTicktickUpdated}, ` +
-      `archivées: ${stats.archived}, empreintes initialisées: ${stats.seeded}, nouveaux projets: ${stats.newProjects}, ` +
+      `archivées: ${stats.archived}, empreintes initialisées: ${stats.seeded}, dates restaurées: ${stats.dateRestored}, nouveaux projets: ${stats.newProjects}, ` +
       `erreurs: ${stats.errors}`
     );
     if (stats.errors > 0) hadErrors = true;
@@ -1125,7 +1169,11 @@ async function main() {
   if (hadErrors) process.exit(1);
 }
 
-main().catch((err) => {
-  console.error('Échec du script:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('Échec du script:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { dateOverwrittenAfterCreation, CREATION_GRACE_MS };

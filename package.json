@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "sync": "node sync.js"
+    "sync": "node sync.js",
+    "test": "node --test"
   }
 }
