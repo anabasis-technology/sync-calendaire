@@ -39,7 +39,7 @@ dans les deux sens avec TickTick, chacun routé vers un projet/une base précise
 | Calendrier Google | Base Notion | Projet |
 |---|---|---|
 | Freelance AMGE - ENOVEA | ✅ Tâches Freelance | AMGE |
-| Freelance To Do | ✅ Tâches Freelance | Anabasis (défaut) — tâches sans horaire précis (journée entière) |
+| Freelance To Do | ✅ Tâches Freelance | Anabasis (défaut) — toutes les tâches sans projet client précis, avec ou sans horaire |
 | To Do List | Personnel | — |
 
 **Règle : un calendrier est soit "tâches" (synchronisé, listé ci-dessus), soit "évènements"

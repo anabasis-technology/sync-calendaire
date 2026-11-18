@@ -71,3 +71,36 @@ test('empreinte jamais mémorisée ou illisible, ou created_time absent : flux n
     undefined
   );
 });
+
+// ---------- Routage des tâches vers les calendriers Google ----------
+const { taskBelongsToCalendar } = require('./sync.js');
+
+const projectIndex = { byNormalizedTitle: new Map([['amge', 'id-amge'], ['anabasis', 'id-ana'], ['prepass', 'id-prepass']]) };
+const TODO = { name: 'Freelance To Do', schema: 'freelanceTasks' };
+const AMGE = { name: 'Freelance AMGE - ENOVEA', schema: 'freelanceTasks', projectMatchKey: 'amge' };
+const PERSO = { name: 'To Do List', schema: 'personnel' };
+const timed = (tags = []) => ({ isAllDay: false, tags });
+const allDay = (tags = []) => ({ isAllDay: true, tags });
+
+test('Freelance To Do : tâches sans projet précis, avec OU sans horaire', () => {
+  assert.equal(taskBelongsToCalendar(timed(), TODO, projectIndex), true);
+  assert.equal(taskBelongsToCalendar(allDay(), TODO, projectIndex), true);
+});
+
+test('Freelance To Do : le tag "anabasis" (projet par défaut) reste dans le lot', () => {
+  assert.equal(taskBelongsToCalendar(timed(['anabasis']), TODO, projectIndex), true);
+  assert.equal(taskBelongsToCalendar(allDay(['Anabasis']), TODO, projectIndex), true);
+});
+
+test('Une tâche à projet client précis va dans son calendrier, pas dans Freelance To Do', () => {
+  assert.equal(taskBelongsToCalendar(timed(['amge']), AMGE, projectIndex), true);
+  assert.equal(taskBelongsToCalendar(allDay(['amge']), AMGE, projectIndex), true);
+  assert.equal(taskBelongsToCalendar(timed(['amge']), TODO, projectIndex), false);
+  assert.equal(taskBelongsToCalendar(timed(['prepass']), TODO, projectIndex), false);
+  assert.equal(taskBelongsToCalendar(timed(), AMGE, projectIndex), false);
+});
+
+test('Personnel : toutes les tâches vont dans To Do List', () => {
+  assert.equal(taskBelongsToCalendar(timed(), PERSO, projectIndex), true);
+  assert.equal(taskBelongsToCalendar(allDay(['amge']), PERSO, projectIndex), true);
+});

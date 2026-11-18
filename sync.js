@@ -68,7 +68,7 @@ const GCAL_INCOMING_LOOKAHEAD_DAYS = 14;
 // effacés de Google Calendar).
 const GCAL_CALENDARS = [
   { name: 'Freelance AMGE - ENOVEA', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks', projectMatchKey: 'amge' },
-  { name: 'Freelance To Do', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks', timedOnly: false },
+  { name: 'Freelance To Do', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks' },
   { name: 'To Do List', ticktickProjectId: '67ee6a2c8f082fe808671e3c', schema: 'personnel' },
 ];
 
@@ -640,9 +640,10 @@ function taskBelongsToCalendar(task, calConfig, projectIndex) {
   // "anabasis" est le projet fourre-tout par défaut (voir DEFAULT_PROJECT_ID), pas un
   // client précis : une tâche qui le porte (explicitement, ou repoussée en tag par le sync
   // Notion -> TickTick) reste dans le lot par défaut FreeLance/Freelance To Do, pas exclue.
-  if (projectMatchKey && projectMatchKey !== 'anabasis') return false; // projet précis -> son propre calendrier (ex. AMGE)
-  const hasPreciseTime = !task.isAllDay;
-  return calConfig.timedOnly ? hasPreciseTime : !hasPreciseTime;
+  // Calendrier "tâches" par défaut (Freelance To Do) : toutes les tâches sans projet client
+  // précis, avec ou sans horaire (depuis le 18/11/2026 : plus de séparation par type d'horaire,
+  // les évènements/blocs de planning vivent dans "FreeLance", hors synchro).
+  return !(projectMatchKey && projectMatchKey !== 'anabasis'); // projet précis -> son propre calendrier (ex. AMGE)
 }
 
 // ---------- Google Calendar : sync d'un calendrier <-> une liste TickTick ----------
@@ -1181,4 +1182,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { dateOverwrittenAfterCreation, CREATION_GRACE_MS, gcalFetch, ticktickFetch, loadCalendarIdsByName, sleep };
+module.exports = { dateOverwrittenAfterCreation, CREATION_GRACE_MS, taskBelongsToCalendar, gcalFetch, ticktickFetch, loadCalendarIdsByName, sleep };
