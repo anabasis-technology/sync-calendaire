@@ -29,7 +29,22 @@ async function loadEvents(calendarId) {
   return events;
 }
 
+async function diag() {
+  const targetIds = JSON.parse(fs.readFileSync(`${__dirname}/cleanup-targets.json`, 'utf8'));
+  const data = await ticktickFetch(`/project/${TICKTICK_PROJECT_ID}/data`);
+  const inList = new Set((data.tasks || []).map((t) => t.id));
+  console.log(`Tâches du projet dans la liste standard: ${inList.size}; cibles encore listées: ${targetIds.filter((id) => inList.has(id)).length}`);
+  for (const id of targetIds.slice(0, 3)) {
+    const task = await ticktickFetch(`/project/${TICKTICK_PROJECT_ID}/task/${id}`);
+    const view = task && !task.__notFound
+      ? Object.fromEntries(Object.entries(task).filter(([k]) => /^(status|deleted|kind|projectId|isAllDay|completedTime|modifiedTime|createdTime)$/.test(k)))
+      : task;
+    console.log(`  ${id.slice(-6)}: ${JSON.stringify(view)}`);
+  }
+}
+
 async function main() {
+  if (process.env.DIAG === 'true') return diag();
   const targetIds = JSON.parse(fs.readFileSync(`${__dirname}/cleanup-targets.json`, 'utf8'));
   console.log(`Mode: ${EXECUTE ? 'EXÉCUTION' : 'ESSAI À BLANC (rien n\'est modifié)'} — ${targetIds.length} cibles`);
 

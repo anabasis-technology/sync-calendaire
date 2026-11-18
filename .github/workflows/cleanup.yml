@@ -6,6 +6,9 @@ on:
       execute:
         description: "true = exécuter ; sinon essai à blanc"
         default: "false"
+      diag:
+        description: "true = diagnostic de lecture seule"
+        default: "false"
 
 jobs:
   cleanup:
@@ -18,6 +21,7 @@ jobs:
       - run: node cleanup-freelance-imports.js
         env:
           EXECUTE: ${{ inputs.execute }}
+          DIAG: ${{ inputs.diag }}
           TICKTICK_TOKEN: ${{ secrets.TICKTICK_TOKEN }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
