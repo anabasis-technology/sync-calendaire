@@ -33,18 +33,21 @@ Fait partie du projet "Sync Calendaire" (voir la page Notion dédiée dans la ba
 
 ## Google Calendar
 
-Quatre calendriers Google (déjà existants, pas de calendrier dédié créé) sont synchronisés
+Trois calendriers Google (déjà existants, pas de calendrier dédié créé) sont synchronisés
 dans les deux sens avec TickTick, chacun routé vers un projet/une base précise :
 
 | Calendrier Google | Base Notion | Projet |
 |---|---|---|
 | Freelance AMGE - ENOVEA | ✅ Tâches Freelance | AMGE |
-| FreeLance | ✅ Tâches Freelance | Anabasis (défaut) — tâches avec horaire précis |
 | Freelance To Do | ✅ Tâches Freelance | Anabasis (défaut) — tâches sans horaire précis (journée entière) |
 | To Do List | Personnel | — |
 
-Tous les autres calendriers (Calls Freelance, Sylvain Héliou, Mathilde, Calendly, etc.) ne
-sont jamais touchés — ce sont de vrais rendez-vous/évènements, pas des tâches.
+**Règle : un calendrier est soit "tâches" (synchronisé, listé ci-dessus), soit "évènements"
+(jamais touché).** Tous les autres calendriers (FreeLance, Calls Freelance, Sylvain Héliou,
+Mathilde, Calendly, etc.) ne sont jamais lus ni modifiés — ce sont de vrais
+rendez-vous/évènements/blocs de planning, pas des tâches. « FreeLance » en a été retiré le
+18/11/2026 : 25 blocs de planning y avaient été importés comme tâches TickTick, et la règle
+« tâche en retard -> évènement supprimé » les aurait effacés de Google Calendar.
 
 - **Périmètre limité à "aujourd'hui et après"**, des deux côtés. Aucun import de l'historique
   des calendriers (certaines séries récurrentes remontent à 2017) : seuls les nouveaux

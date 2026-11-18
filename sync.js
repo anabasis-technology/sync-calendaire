@@ -60,9 +60,14 @@ const GCAL_INCOMING_LOOKAHEAD_DAYS = 14;
 // des calendriers (des séries récurrentes vieilles de plusieurs années y vivent, cf. page
 // Notion du projet), ni tâche TickTick en retard poussée vers GCal. Une tâche qui devient
 // en retard voit simplement son évènement GCal disparaître.
+//
+// Un calendrier est soit "tâches" (synchronisé, listé ici), soit "évènements" (jamais touché,
+// absent de cette liste). "FreeLance" est un calendrier d'évènements/blocs de planning : il
+// n'est volontairement PAS synchronisé (le 18/11/2026, 25 blocs de planning y ont été importés
+// comme tâches TickTick, et la règle "tâche en retard -> évènement supprimé" les aurait
+// effacés de Google Calendar).
 const GCAL_CALENDARS = [
   { name: 'Freelance AMGE - ENOVEA', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks', projectMatchKey: 'amge' },
-  { name: 'FreeLance', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks', timedOnly: true },
   { name: 'Freelance To Do', ticktickProjectId: '67ee6a2c8f082fe808671e39', schema: 'freelanceTasks', timedOnly: false },
   { name: 'To Do List', ticktickProjectId: '67ee6a2c8f082fe808671e3c', schema: 'personnel' },
 ];
