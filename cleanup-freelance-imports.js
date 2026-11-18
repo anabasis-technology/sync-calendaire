@@ -43,7 +43,26 @@ async function diag() {
   }
 }
 
+async function archiveNotionPages() {
+  const { loadAllPages, getTicktickId, notionFetch } = require("./sync.js");
+  const targetIds = new Set(JSON.parse(fs.readFileSync(`${__dirname}/cleanup-targets.json`, "utf8")));
+  const pages = await loadAllPages("bf6dd6cd-3ac2-49d8-aeca-35a61f40a1c5");
+  const matches = pages.filter((p) => targetIds.has(getTicktickId(p)));
+  console.log(`Pages Notion correspondantes: ${matches.length}/${targetIds.size} (${EXECUTE ? "EXÉCUTION" : "ESSAI À BLANC"})`);
+  if (!EXECUTE) return;
+  if (matches.length !== targetIds.size) {
+    console.error("Abandon : le nombre de pages ne correspond pas aux cibles, aucune modification.");
+    process.exit(1);
+  }
+  for (const p of matches) {
+    await notionFetch(`/pages/${p.id}`, { method: "PATCH", body: JSON.stringify({ archived: true }) });
+    await sleep(300);
+  }
+  console.log(`Pages Notion archivées: ${matches.length}.`);
+}
+
 async function main() {
+  if (process.env.ARCHIVE_NOTION === "true") return archiveNotionPages();
   if (process.env.DIAG === 'true') return diag();
   const targetIds = JSON.parse(fs.readFileSync(`${__dirname}/cleanup-targets.json`, 'utf8'));
   console.log(`Mode: ${EXECUTE ? 'EXÉCUTION' : 'ESSAI À BLANC (rien n\'est modifié)'} — ${targetIds.length} cibles`);

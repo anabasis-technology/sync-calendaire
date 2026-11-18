@@ -6,6 +6,9 @@ on:
       execute:
         description: "true = exécuter ; sinon essai à blanc"
         default: "false"
+      archive_notion:
+        description: "true = archiver les pages Notion ciblées (avec execute)"
+        default: "false"
       diag:
         description: "true = diagnostic de lecture seule"
         default: "false"
@@ -22,6 +25,8 @@ jobs:
         env:
           EXECUTE: ${{ inputs.execute }}
           DIAG: ${{ inputs.diag }}
+          ARCHIVE_NOTION: ${{ inputs.archive_notion }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           TICKTICK_TOKEN: ${{ secrets.TICKTICK_TOKEN }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
