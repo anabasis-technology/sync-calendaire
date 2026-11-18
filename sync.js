@@ -1181,4 +1181,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { dateOverwrittenAfterCreation, CREATION_GRACE_MS };
+module.exports = { dateOverwrittenAfterCreation, CREATION_GRACE_MS, gcalFetch, ticktickFetch, loadCalendarIdsByName, sleep };

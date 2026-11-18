@@ -1,0 +1,24 @@
+name: Nettoyage ponctuel FreeLance (temporaire)
+
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "true = exécuter ; sinon essai à blanc"
+        default: "false"
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node cleanup-freelance-imports.js
+        env:
+          EXECUTE: ${{ inputs.execute }}
+          TICKTICK_TOKEN: ${{ secrets.TICKTICK_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
