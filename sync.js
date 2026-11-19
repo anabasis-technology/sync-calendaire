@@ -29,6 +29,8 @@
 // verrait tout son contenu historique dupliqué dans TickTick au premier passage — c'est
 // exactement ce qui s'est produit avant l'ajout de ce garde-fou, sur la base Personnel.
 
+const { createHash } = require('node:crypto');
+
 const TICKTICK_TOKEN = process.env.TICKTICK_TOKEN;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -374,8 +376,32 @@ function getStoredSnapshot(page) {
 // computeTicktickSnapshot(task). C'est ce qui permet de détecter "qui a changé" sans
 // dépendre d'un horodatage d'aucun des deux systèmes.
 
+// Notion refuse un rich_text de plus de 2000 caractères (erreur 400 "validation_error"). Le JSON
+// de l'empreinte embarque la description (déjà tronquée à 1900) plus le titre, les tags et
+// l'échappement des guillemets/retours à la ligne : il dépassait donc 2000 pour une tâche à
+// longue description, et la création de sa page Notion échouait à CHAQUE passage (146 échecs
+// consécutifs du 18 au 19/11/2026). Au-delà de ce plafond, la description est remplacée par son
+// début + un hachage du texte complet : toute modification, même en fin de texte, change
+// toujours l'empreinte. Les empreintes courtes restent identiques à l'ancien format.
+const SNAPSHOT_MAX_CHARS = 1900;
+
 function snapshotOf({ title, date, tags, description, checked, projet, priority }) {
-  return JSON.stringify({ title, date, tags: tags.slice().sort(), description, checked, projet, priority });
+  const sortedTags = tags.slice().sort();
+  const build = (desc) => JSON.stringify({ title, date, tags: sortedTags, description: desc, checked, projet, priority });
+  let json = build(description);
+  if (json.length <= SNAPSHOT_MAX_CHARS) return json;
+
+  const hash = createHash('sha1').update(description).digest('hex').slice(0, 12);
+  let keep = description.length;
+  while (json.length > SNAPSHOT_MAX_CHARS && keep > 0) {
+    keep = Math.max(0, keep - Math.max(50, json.length - SNAPSHOT_MAX_CHARS));
+    json = build(`${description.slice(0, keep)}…#${hash}`);
+  }
+  if (json.length > SNAPSHOT_MAX_CHARS) {
+    // Même sans description, titre/tags trop longs : repli sur un hachage de l'ensemble.
+    json = JSON.stringify({ h: createHash('sha1').update(build(description)).digest('hex') });
+  }
+  return json;
 }
 
 function computeNotionSnapshot(page, schema) {
@@ -1182,4 +1208,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { dateOverwrittenAfterCreation, CREATION_GRACE_MS, taskBelongsToCalendar };
+module.exports = { dateOverwrittenAfterCreation, CREATION_GRACE_MS, taskBelongsToCalendar, snapshotOf };

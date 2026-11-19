@@ -104,3 +104,37 @@ test('Personnel : toutes les tâches vont dans To Do List', () => {
   assert.equal(taskBelongsToCalendar(timed(), PERSO, projectIndex), true);
   assert.equal(taskBelongsToCalendar(allDay(['amge']), PERSO, projectIndex), true);
 });
+
+// ---------- Empreinte : plafond de taille imposé par Notion (rich_text <= 2000) ----------
+const { snapshotOf } = require('./sync.js');
+
+const base = { title: 'Tâche', date: '2026-11-19', tags: ['b', 'a'], checked: false, projet: 'p', priority: 'Aucune' };
+// Pire cas : description de 1900 caractères pleine de retours à la ligne et de guillemets,
+// que l'échappement JSON double presque (c'est ce qui a fait échouer la synchro le 18/11/2026).
+const longDescription = ('Ligne "citée"\n').repeat(200).slice(0, 1900);
+
+test('empreinte courte : identique à l\'ancien format (compatibilité des empreintes stockées)', () => {
+  const fields = { ...base, description: 'courte' };
+  assert.equal(
+    snapshotOf(fields),
+    JSON.stringify({ title: 'Tâche', date: '2026-11-19', tags: ['a', 'b'], description: 'courte', checked: false, projet: 'p', priority: 'Aucune' })
+  );
+});
+
+test('longue description à échappements : empreinte valide sous la limite de 2000 caractères de Notion', () => {
+  const snap = snapshotOf({ ...base, description: longDescription });
+  assert.ok(snap.length <= 1900, `longueur ${snap.length}`);
+  assert.doesNotThrow(() => JSON.parse(snap));
+});
+
+test("longue description : déterministe, et une modification en fin de texte change l'empreinte", () => {
+  const a = snapshotOf({ ...base, description: longDescription });
+  assert.equal(a, snapshotOf({ ...base, description: longDescription }));
+  const b = snapshotOf({ ...base, description: longDescription.slice(0, -1) + 'X' });
+  assert.notEqual(a, b);
+});
+
+test('titre démesuré : toujours sous la limite (repli sur un hachage)', () => {
+  const snap = snapshotOf({ ...base, title: 'T'.repeat(5000), description: longDescription });
+  assert.ok(snap.length <= 2000, `longueur ${snap.length}`);
+});
